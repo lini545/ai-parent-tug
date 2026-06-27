@@ -264,6 +264,7 @@ io.on('connection', (socket) => {
 })
 
 server.listen(port, '0.0.0.0', () => {
+  console.log(`Socket.IO service started on http://0.0.0.0:${port}`)
   console.log(`API server listening on http://0.0.0.0:${port}`)
   console.log(`LAN client URL: ${clientOrigin}`)
 })

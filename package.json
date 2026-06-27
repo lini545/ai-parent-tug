@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
-    "dev:client": "vite --host 0.0.0.0",
-    "dev:server": "tsx watch server/index.ts",
+    "client": "vite --host 0.0.0.0",
+    "server": "tsx watch server/index.ts",
+    "dev": "concurrently \"npm:server\" \"npm:client\"",
     "check": "tsc -b && vite build",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
