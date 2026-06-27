@@ -324,7 +324,7 @@ io.on('connection', (socket) => {
       return
     }
 
-    if (room.child && room.child.id !== socket.id) {
+    if (room.child?.connected && room.child.id !== socket.id) {
       socket.emit('error_message', '这个房间已经有孩子加入了')
       return
     }

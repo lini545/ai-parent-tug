@@ -9,5 +9,5 @@ export const getServerOrigin = () => {
 
 export const socket = io(getServerOrigin(), {
   autoConnect: false,
-  transports: ['websocket', 'polling'],
+  transports: import.meta.env.PROD ? ['polling', 'websocket'] : ['websocket', 'polling'],
 })
