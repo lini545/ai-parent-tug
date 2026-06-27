@@ -2,7 +2,8 @@ import express from 'express'
 import http from 'node:http'
 import os from 'node:os'
 import { Server } from 'socket.io'
-import { fallbackQuestions, fallbackReport } from './mockData.ts'
+import { buildFallbackReport, generateQuestions, generateReport } from './ai.ts'
+import { fallbackQuestions } from './mockData.ts'
 import type {
   Answer,
   CreateRoomPayload,
@@ -170,7 +171,7 @@ io.on('connection', (socket) => {
     acknowledge(ack, { ok: true, data: makePublicState(room) })
   })
 
-  socket.on('game:start', (code: string, ack?: (response: SocketAck<PublicRoomState>) => void) => {
+  socket.on('game:start', async (code: string, ack?: (response: SocketAck<PublicRoomState>) => void) => {
     const room = rooms.get(code)
     if (!room) {
       acknowledge(ack, { ok: false, error: '房间不存在或已过期' })
@@ -190,7 +191,9 @@ io.on('connection', (socket) => {
 
     room.phase = 'playing'
     room.currentQuestionIndex = 0
+    room.questions = await generateQuestions()
     room.answers = []
+    room.report = undefined
     room.updatedAt = now()
     acknowledge(ack, { ok: true, data: makePublicState(room) })
     emitRoom(room)
@@ -198,7 +201,7 @@ io.on('connection', (socket) => {
 
   socket.on(
     'answer:submit',
-    (payload: SubmitAnswerPayload, ack?: (response: SocketAck<PublicRoomState>) => void) => {
+    async (payload: SubmitAnswerPayload, ack?: (response: SocketAck<PublicRoomState>) => void) => {
       const room = rooms.get(payload.code)
       if (!room) {
         acknowledge(ack, { ok: false, error: '房间不存在或已过期' })
@@ -233,7 +236,7 @@ io.on('connection', (socket) => {
       if (bothAnswered) {
         if (room.currentQuestionIndex >= room.questions.length - 1) {
           room.phase = 'report'
-          room.report = fallbackReport
+          room.report = await generateReport(room)
         } else {
           room.currentQuestionIndex += 1
         }
@@ -250,6 +253,9 @@ io.on('connection', (socket) => {
       const player = getPlayer(room, socket.id)
       if (player) {
         player.connected = false
+        if (room.phase === 'report' && !room.report) {
+          room.report = buildFallbackReport(room)
+        }
         room.updatedAt = now()
         emitRoom(room)
       }
