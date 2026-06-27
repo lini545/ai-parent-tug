@@ -188,6 +188,26 @@ function App() {
     const onGameStarted = (nextRoom: Room) => {
       setRoom(nextRoom)
       setRoomCode(nextRoom.code)
+      const game = nextRoom.game
+      const question = game?.questions[game.currentQuestionIndex]
+      if (game && question) {
+        const answers = game.answers[question.id] ?? {}
+        setQuestionState({
+          question,
+          currentQuestionIndex: game.currentQuestionIndex,
+          totalQuestions: game.questions.length,
+          answeredRoles: Object.keys(answers) as PlayerRole[],
+          scores: {
+            ropePosition: game.ropePosition,
+            tacitScore: game.tacitScore,
+            empathyScore: game.empathyScore,
+            pressureScore: game.pressureScore,
+            consensusScore: game.consensusScore,
+          },
+        })
+        setSelectedAnswerId('')
+        setRoundResult(null)
+      }
       setPage('game')
       navigate(`/game/${nextRoom.code}`)
     }
