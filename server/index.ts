@@ -2,6 +2,10 @@ import express from 'express'
 import http from 'node:http'
 import os from 'node:os'
 import { Server } from 'socket.io'
+import { generateQuestions } from './src/aiService.ts'
+import type { Question } from './src/mockQuestions.ts'
+
+type PlayerRole = 'parent' | 'child'
 
 type Player = {
   id: string
@@ -9,16 +13,27 @@ type Player = {
   connected: boolean
 }
 
-type Question = {
-  id: string
-  type: 'tacit' | 'emotion'
-  text: string
-  options: string[]
+type Answer = {
+  role: PlayerRole
+  answerId: string
+}
+
+type RoundResult = {
+  questionId: string
+  title: string
+  message: string
+  parentAnswerId: string
+  childAnswerId: string
+  isMatch: boolean
+  scores: Pick<
+    GameState,
+    'ropePosition' | 'tacitScore' | 'empathyScore' | 'pressureScore' | 'consensusScore'
+  >
 }
 
 type GameState = {
   currentQuestionIndex: number
-  answers: Record<string, unknown>
+  answers: Record<string, Partial<Record<PlayerRole, string>>>
   ropePosition: number
   tacitScore: number
   empathyScore: number
@@ -27,6 +42,7 @@ type GameState = {
   differences: string[]
   emotionWarnings: string[]
   questions: Question[]
+  lastRoundResult?: RoundResult
 }
 
 type Room = {
@@ -55,21 +71,6 @@ const port = Number(process.env.PORT ?? 3001)
 const rooms = new Map<string, Room>()
 const socketRooms = new Map<string, string>()
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-
-const mockQuestions: Question[] = [
-  {
-    id: 'mock-1',
-    type: 'tacit',
-    text: '孩子放学后最希望家长先做什么？',
-    options: ['问今天开心吗', '给一点安静时间', '聊作业安排', '一起吃点东西'],
-  },
-  {
-    id: 'mock-2',
-    type: 'emotion',
-    text: '发生争执时，哪句话更适合先打开沟通？',
-    options: ['你必须听我的', '我想先听听你的想法', '这有什么好说的', '你怎么又这样'],
-  },
-]
 
 const getLanIp = () => {
   const interfaces = os.networkInterfaces()
@@ -104,7 +105,7 @@ const createPlayer = (id: string, nickname: string): Player => ({
   connected: true,
 })
 
-const createInitialGameState = (): GameState => ({
+const createInitialGameState = (questions: Question[]): GameState => ({
   currentQuestionIndex: 0,
   answers: {},
   ropePosition: 0,
@@ -114,7 +115,7 @@ const createInitialGameState = (): GameState => ({
   consensusScore: 0,
   differences: [],
   emotionWarnings: [],
-  questions: mockQuestions,
+  questions,
 })
 
 const toClientRoom = (room: Room): ClientRoom => ({
@@ -123,22 +124,147 @@ const toClientRoom = (room: Room): ClientRoom => ({
   isChildReady: Boolean(room.child?.connected),
 })
 
+const currentQuestion = (room: Room) => room.game?.questions[room.game.currentQuestionIndex]
+
 const emitRoomUpdated = (room: Room) => {
   io.to(room.code).emit('room_updated', toClientRoom(room))
 }
 
 const emitCurrentQuestion = (room: Room) => {
   const game = room.game
+  const question = currentQuestion(room)
+  if (!game || !question) {
+    return
+  }
+
+  const answers = game.answers[question.id] ?? {}
+  io.to(room.code).emit('question_updated', {
+    question,
+    currentQuestionIndex: game.currentQuestionIndex,
+    totalQuestions: game.questions.length,
+    answeredRoles: Object.keys(answers),
+    scores: {
+      ropePosition: game.ropePosition,
+      tacitScore: game.tacitScore,
+      empathyScore: game.empathyScore,
+      pressureScore: game.pressureScore,
+      consensusScore: game.consensusScore,
+    },
+  })
+}
+
+const getRoleForSocket = (room: Room, socketId: string): PlayerRole | null => {
+  if (room.parent?.id === socketId) {
+    return 'parent'
+  }
+
+  if (room.child?.id === socketId) {
+    return 'child'
+  }
+
+  return null
+}
+
+const moveRopeTowardCenter = (position: number) => {
+  if (position > 0) {
+    return Math.max(0, position - 15)
+  }
+
+  if (position < 0) {
+    return Math.min(0, position + 15)
+  }
+
+  return 0
+}
+
+const findOption = (question: Question, answerId: string) =>
+  question.options.find((option) => option.id === answerId)
+
+const settleRound = (room: Room, question: Question, answers: Record<PlayerRole, string>) => {
+  const game = room.game
   if (!game) {
     return
   }
 
-  io.to(room.code).emit('question_updated', {
-    question: game.questions[game.currentQuestionIndex],
-    currentQuestionIndex: game.currentQuestionIndex,
-    totalQuestions: game.questions.length,
-    answers: game.answers,
-  })
+  const isMatch = answers.parent === answers.child
+  let message = ''
+
+  if (question.type === 'tacit') {
+    if (isMatch) {
+      game.tacitScore += 20
+      game.consensusScore += 10
+      game.ropePosition = moveRopeTowardCenter(game.ropePosition)
+      message = '默契共鸣'
+    } else {
+      const parentOption = findOption(question, answers.parent)?.text ?? answers.parent
+      const childOption = findOption(question, answers.child)?.text ?? answers.child
+      game.differences.push(`${question.title}：家长选择「${parentOption}」，孩子选择「${childOption}」`)
+      game.ropePosition -= 10
+      message = '发现认知差异'
+    }
+  } else {
+    const parentOption = findOption(question, answers.parent)
+    const empathy = parentOption?.empathy ?? 0
+    const pressure = parentOption?.pressure ?? 0
+    const solution = parentOption?.solution ?? 0
+    const respect = parentOption?.respect ?? 0
+
+    game.empathyScore += empathy
+    game.pressureScore += pressure
+    game.consensusScore += Math.round((solution + respect) / 2)
+
+    if (isMatch) {
+      game.tacitScore += 5
+      game.consensusScore += 10
+      message = '表达被接住了'
+    } else {
+      message = '表达选择已记录'
+    }
+
+    if (pressure >= 7 && empathy <= 4) {
+      game.emotionWarnings.push(`${question.title}：高压力低共情表达可能让压力上升`)
+      message = '这句话可能让压力上升'
+      game.ropePosition -= 10
+    } else if (isMatch) {
+      game.ropePosition = moveRopeTowardCenter(game.ropePosition)
+    }
+  }
+
+  game.lastRoundResult = {
+    questionId: question.id,
+    title: question.title,
+    message,
+    parentAnswerId: answers.parent,
+    childAnswerId: answers.child,
+    isMatch,
+    scores: {
+      ropePosition: game.ropePosition,
+      tacitScore: game.tacitScore,
+      empathyScore: game.empathyScore,
+      pressureScore: game.pressureScore,
+      consensusScore: game.consensusScore,
+    },
+  }
+}
+
+const advanceAfterRound = (room: Room) => {
+  setTimeout(() => {
+    const game = room.game
+    if (!game) {
+      return
+    }
+
+    if (game.currentQuestionIndex >= game.questions.length - 1) {
+      room.status = 'finished'
+      emitRoomUpdated(room)
+      io.to(room.code).emit('game_finished', toClientRoom(room))
+      return
+    }
+
+    game.currentQuestionIndex += 1
+    emitRoomUpdated(room)
+    emitCurrentQuestion(room)
+  }, 2000)
 }
 
 app.get('/api/health', (_req, res) => {
@@ -192,7 +318,7 @@ io.on('connection', (socket) => {
     emitRoomUpdated(room)
   })
 
-  socket.on('start_game', (payload: { code?: string }) => {
+  socket.on('start_game', async (payload: { code?: string }) => {
     const code = normalizeCode(payload.code ?? '')
     const room = rooms.get(code)
 
@@ -215,14 +341,70 @@ io.on('connection', (socket) => {
     emitRoomUpdated(room)
     io.to(room.code).emit('generating_questions', toClientRoom(room))
 
-    setTimeout(() => {
-      room.game = createInitialGameState()
-      room.status = 'playing'
-      emitRoomUpdated(room)
-      io.to(room.code).emit('game_started', toClientRoom(room))
-      emitCurrentQuestion(room)
-    }, 600)
+    const questions = await generateQuestions({
+      gameTitle: '谁更懂谁：AI 亲子默契拔河',
+      target: '亲子活动现场',
+      totalQuestions: 10,
+      tacitCount: 5,
+      emotionCount: 5,
+      ageRange: '小学高年级到初中',
+      style: '温和、真实、有活动展示感',
+    })
+
+    room.game = createInitialGameState(questions)
+    room.status = 'playing'
+    emitRoomUpdated(room)
+    io.to(room.code).emit('game_started', toClientRoom(room))
+    emitCurrentQuestion(room)
   })
+
+  socket.on(
+    'submit_answer',
+    (payload: { code?: string; role?: PlayerRole; questionId?: string; answerId?: string }) => {
+      const code = normalizeCode(payload.code ?? '')
+      const room = rooms.get(code)
+
+      if (!room || !room.game) {
+        socket.emit('error_message', '游戏尚未开始')
+        return
+      }
+
+      const actualRole = getRoleForSocket(room, socket.id)
+      if (!actualRole || actualRole !== payload.role) {
+        socket.emit('error_message', '答题身份不匹配')
+        return
+      }
+
+      const question = currentQuestion(room)
+      if (!question || question.id !== payload.questionId || !payload.answerId) {
+        socket.emit('error_message', '当前题目不匹配')
+        return
+      }
+
+      if (!question.options.some((option) => option.id === payload.answerId)) {
+        socket.emit('error_message', '答案不存在')
+        return
+      }
+
+      const questionAnswers = room.game.answers[question.id] ?? {}
+      questionAnswers[actualRole] = payload.answerId
+      room.game.answers[question.id] = questionAnswers
+
+      const submitted: Answer = { role: actualRole, answerId: payload.answerId }
+      io.to(room.code).emit('answer_submitted', {
+        questionId: question.id,
+        role: submitted.role,
+      })
+      emitCurrentQuestion(room)
+
+      if (questionAnswers.parent && questionAnswers.child) {
+        settleRound(room, question, questionAnswers as Record<PlayerRole, string>)
+        emitRoomUpdated(room)
+        io.to(room.code).emit('round_result', room.game.lastRoundResult)
+        advanceAfterRound(room)
+      }
+    },
+  )
 
   socket.on('disconnect', () => {
     const code = socketRooms.get(socket.id)

@@ -3,10 +3,59 @@ import type { ReactNode } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import { socket } from './lib/socket'
 
+type PlayerRole = 'parent' | 'child'
+
 type Player = {
   id: string
   nickname: string
   connected: boolean
+}
+
+type QuestionOption = {
+  id: string
+  text: string
+  empathy?: number
+  pressure?: number
+  solution?: number
+  respect?: number
+}
+
+type Question = {
+  id: string
+  type: 'tacit' | 'emotion'
+  mode?: 'parent_guess_child' | 'child_guess_parent'
+  title: string
+  scene?: string
+  question: string
+  options: QuestionOption[]
+  analysisHint?: string
+}
+
+type Scores = {
+  ropePosition: number
+  tacitScore: number
+  empathyScore: number
+  pressureScore: number
+  consensusScore: number
+}
+
+type RoundResult = {
+  questionId: string
+  title: string
+  message: string
+  parentAnswerId: string
+  childAnswerId: string
+  isMatch: boolean
+  scores: Scores
+}
+
+type GameState = Scores & {
+  currentQuestionIndex: number
+  answers: Record<string, Partial<Record<PlayerRole, string>>>
+  differences: string[]
+  emotionWarnings: string[]
+  questions: Question[]
+  lastRoundResult?: RoundResult
 }
 
 type Room = {
@@ -19,70 +68,34 @@ type Room = {
   isChildReady: boolean
 }
 
-type Question = {
-  id: string
-  type: 'tacit' | 'emotion'
-  text: string
-  options: string[]
-}
-
 type QuestionState = {
   question: Question
   currentQuestionIndex: number
   totalQuestions: number
-  answers: Record<string, unknown>
+  answeredRoles: PlayerRole[]
+  scores: Scores
 }
 
-type GameState = {
-  currentQuestionIndex: number
-  answers: Record<string, unknown>
-  ropePosition: number
-  tacitScore: number
-  empathyScore: number
-  pressureScore: number
-  consensusScore: number
-  differences: string[]
-  emotionWarnings: string[]
-  questions: Question[]
-}
-
-type Role = 'parent' | 'child' | null
 type Page = 'home' | 'create' | 'join' | 'room' | 'game'
 
 const getInitialPage = (): Page => {
-  if (window.location.pathname.startsWith('/create')) {
-    return 'create'
-  }
-
-  if (window.location.pathname.startsWith('/join')) {
-    return 'join'
-  }
-
-  if (window.location.pathname.startsWith('/room')) {
-    return 'room'
-  }
-
-  if (window.location.pathname.startsWith('/game')) {
-    return 'game'
-  }
-
+  if (window.location.pathname.startsWith('/create')) return 'create'
+  if (window.location.pathname.startsWith('/join')) return 'join'
+  if (window.location.pathname.startsWith('/room')) return 'room'
+  if (window.location.pathname.startsWith('/game')) return 'game'
   return 'home'
 }
 
 const getCodeFromUrl = () => {
   const searchCode = new URLSearchParams(window.location.search).get('code')
-  if (searchCode) {
-    return searchCode.trim().toUpperCase()
-  }
+  if (searchCode) return searchCode.trim().toUpperCase()
 
   const roomMatch = window.location.pathname.match(/^\/room\/([A-Z0-9]{6})/i)
   const gameMatch = window.location.pathname.match(/^\/game\/([A-Z0-9]{6})/i)
   return roomMatch?.[1]?.toUpperCase() ?? gameMatch?.[1]?.toUpperCase() ?? ''
 }
 
-const navigate = (path: string) => {
-  window.history.pushState(null, '', path)
-}
+const navigate = (path: string) => window.history.pushState(null, '', path)
 
 const makeJoinUrl = (code: string) =>
   `${window.location.protocol}//${window.location.hostname}:5173/join?code=${code}`
@@ -93,11 +106,13 @@ const isLocalHost = () =>
 function App() {
   const [page, setPage] = useState<Page>(getInitialPage)
   const [connected, setConnected] = useState(socket.connected)
-  const [role, setRole] = useState<Role>(null)
+  const [role, setRole] = useState<PlayerRole | null>(null)
   const [nickname, setNickname] = useState('')
   const [roomCode, setRoomCode] = useState(getCodeFromUrl)
   const [room, setRoom] = useState<Room | null>(null)
   const [questionState, setQuestionState] = useState<QuestionState | null>(null)
+  const [selectedAnswerId, setSelectedAnswerId] = useState('')
+  const [roundResult, setRoundResult] = useState<RoundResult | null>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -132,6 +147,13 @@ function App() {
     }
     const onQuestionUpdated = (nextQuestionState: QuestionState) => {
       setQuestionState(nextQuestionState)
+      setSelectedAnswerId('')
+      setRoundResult(null)
+    }
+    const onRoundResult = (result: RoundResult) => setRoundResult(result)
+    const onGameFinished = (nextRoom: Room) => {
+      setRoom(nextRoom)
+      setPage('game')
     }
     const onErrorMessage = (message: string) => setError(message)
 
@@ -143,6 +165,8 @@ function App() {
     socket.on('generating_questions', onGeneratingQuestions)
     socket.on('game_started', onGameStarted)
     socket.on('question_updated', onQuestionUpdated)
+    socket.on('round_result', onRoundResult)
+    socket.on('game_finished', onGameFinished)
     socket.on('error_message', onErrorMessage)
     socket.connect()
 
@@ -155,12 +179,19 @@ function App() {
       socket.off('generating_questions', onGeneratingQuestions)
       socket.off('game_started', onGameStarted)
       socket.off('question_updated', onQuestionUpdated)
+      socket.off('round_result', onRoundResult)
+      socket.off('game_finished', onGameFinished)
       socket.off('error_message', onErrorMessage)
     }
   }, [])
 
   const activeCode = room?.code ?? roomCode
   const joinUrl = activeCode ? makeJoinUrl(activeCode) : ''
+  const activeQuestion = questionState?.question ?? room?.game?.questions[room.game.currentQuestionIndex]
+  const scores = roundResult?.scores ?? questionState?.scores ?? room?.game
+  const answeredRoles = questionState?.answeredRoles ?? []
+  const hasAnswered = role ? answeredRoles.includes(role) || Boolean(selectedAnswerId && roundResult) : false
+  const waitingForOther = Boolean(selectedAnswerId && !roundResult)
   const canStart = useMemo(
     () => role === 'parent' && Boolean(room?.isParentReady && room.isChildReady),
     [role, room],
@@ -170,9 +201,7 @@ function App() {
     setError('')
     setPage(nextPage)
     navigate(path)
-    if (nextPage === 'join') {
-      setRoomCode(getCodeFromUrl())
-    }
+    if (nextPage === 'join') setRoomCode(getCodeFromUrl())
   }
 
   const createRoom = () => {
@@ -191,12 +220,19 @@ function App() {
   }
 
   const startGame = () => {
-    if (!activeCode) {
-      return
-    }
-
+    if (!activeCode) return
     setError('')
     socket.emit('start_game', { code: activeCode })
+  }
+
+  const submitAnswer = () => {
+    if (!activeCode || !activeQuestion || !role || !selectedAnswerId) return
+    socket.emit('submit_answer', {
+      code: activeCode,
+      role,
+      questionId: activeQuestion.id,
+      answerId: selectedAnswerId,
+    })
   }
 
   return (
@@ -311,7 +347,7 @@ function App() {
                 <button
                   type="button"
                   onClick={startGame}
-                  disabled={!canStart}
+                  disabled={!canStart || room?.status === 'generating_questions'}
                   className="mt-6 h-12 rounded bg-teal-400 px-6 font-semibold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-500 disabled:text-slate-300"
                 >
                   开始游戏
@@ -319,75 +355,89 @@ function App() {
               )}
             </div>
 
-            <aside className="rounded border border-white/10 bg-white/10 p-5 shadow-2xl shadow-black/20 backdrop-blur">
-              <p className="text-sm font-semibold text-teal-200">微信扫码加入</p>
-              {activeCode ? (
-                <>
-                  {isLocalHost() && (
-                    <div className="mt-4 rounded border border-amber-300/70 bg-amber-300/15 p-3 text-sm leading-6 text-amber-100">
-                      当前是 localhost，手机微信扫码可能无法打开。请用电脑局域网 IP
-                      访问本页面后再扫码。
-                    </div>
-                  )}
-                  <div className="mt-4 flex justify-center rounded bg-white p-4">
-                    <QRCodeSVG value={joinUrl} size={240} />
-                  </div>
-                  <p className="mt-3 break-all rounded border border-white/10 bg-slate-950/35 p-3 font-mono text-xs leading-5 text-slate-300">
-                    {joinUrl}
-                  </p>
-                </>
-              ) : (
-                <p className="mt-4 text-sm leading-6 text-slate-300">创建房间后会显示二维码。</p>
-              )}
-            </aside>
+            <QrPanel activeCode={activeCode} joinUrl={joinUrl} />
           </section>
         )}
 
         {page === 'game' && (
           <section className="flex flex-1 items-center py-8">
             <div className="w-full rounded border border-white/10 bg-white/10 p-5 shadow-2xl shadow-black/20 backdrop-blur">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <p className="text-sm font-semibold text-teal-200">游戏进行中</p>
-                  <h2 className="mt-2 text-3xl font-bold">亲子默契题</h2>
-                </div>
-                <div className="rounded border border-white/10 bg-slate-950/35 px-4 py-3 text-sm text-slate-200">
-                  当前题号：
-                  {(questionState?.currentQuestionIndex ?? room?.game?.currentQuestionIndex ?? 0) + 1}/
-                  {questionState?.totalQuestions ?? room?.game?.questions.length ?? 1}
-                </div>
-              </div>
+              {room?.status === 'finished' ? (
+                <FinishedView room={room} />
+              ) : (
+                <>
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-semibold text-teal-200">游戏进行中</p>
+                      <h2 className="mt-2 text-3xl font-bold">{activeQuestion?.title ?? '读取题目中'}</h2>
+                    </div>
+                    <div className="rounded border border-white/10 bg-slate-950/35 px-4 py-3 text-sm text-slate-200">
+                      当前题号：
+                      {(questionState?.currentQuestionIndex ?? room?.game?.currentQuestionIndex ?? 0) + 1}/
+                      {questionState?.totalQuestions ?? room?.game?.questions.length ?? 10}
+                    </div>
+                  </div>
 
-              <div className="mt-6 grid gap-4 md:grid-cols-2">
-                <PlayerCard title="家长" player={room?.parent} />
-                <PlayerCard title="孩子" player={room?.child} />
-              </div>
+                  <div className="mt-6 grid gap-4 md:grid-cols-2">
+                    <PlayerCard title="家长" player={room?.parent} />
+                    <PlayerCard title="孩子" player={room?.child} />
+                  </div>
 
-              <div className="mt-6 rounded border border-white/10 bg-slate-950/30 p-5">
-                <p className="text-sm font-semibold text-teal-200">
-                  {questionState?.question.type === 'emotion' ? '情绪题' : '默契题'}
-                </p>
-                <h3 className="mt-3 text-2xl font-bold leading-snug">
-                  {questionState?.question.text ?? room?.game?.questions[0]?.text ?? '正在读取题目……'}
-                </h3>
-                <div className="mt-5 grid gap-3">
-                  {(questionState?.question.options ?? room?.game?.questions[0]?.options ?? []).map(
-                    (option) => (
-                      <div
-                        key={option}
-                        className="rounded border border-white/10 bg-white/10 px-4 py-3 text-slate-100"
-                      >
-                        {option}
-                      </div>
-                    ),
+                  <ScoreBar scores={scores} />
+
+                  <div className="mt-6 rounded border border-white/10 bg-slate-950/30 p-5">
+                    <p className="text-sm font-semibold text-teal-200">
+                      {activeQuestion?.type === 'emotion' ? '情绪题' : '默契题'}
+                    </p>
+                    {activeQuestion?.scene && (
+                      <p className="mt-3 rounded bg-white/10 p-3 text-sm leading-6 text-slate-300">
+                        {activeQuestion.scene}
+                      </p>
+                    )}
+                    <h3 className="mt-3 text-2xl font-bold leading-snug">
+                      {activeQuestion?.question ?? '正在读取题目……'}
+                    </h3>
+                    <div className="mt-5 grid gap-3">
+                      {(activeQuestion?.options ?? []).map((option) => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => setSelectedAnswerId(option.id)}
+                          disabled={hasAnswered || Boolean(roundResult)}
+                          className={`rounded border px-4 py-3 text-left text-slate-100 transition ${
+                            selectedAnswerId === option.id
+                              ? 'border-teal-300 bg-teal-300/20'
+                              : 'border-white/10 bg-white/10 hover:bg-white/15'
+                          } disabled:cursor-not-allowed disabled:opacity-70`}
+                        >
+                          <span className="font-semibold">{option.id}. </span>
+                          {option.text}
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={submitAnswer}
+                      disabled={!selectedAnswerId || hasAnswered || Boolean(roundResult)}
+                      className="mt-5 h-12 rounded bg-teal-400 px-6 font-semibold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-500 disabled:text-slate-300"
+                    >
+                      {waitingForOther ? '等待对方选择' : '提交答案'}
+                    </button>
+                  </div>
+
+                  <div className="mt-6 grid gap-4 md:grid-cols-2">
+                    <AnswerWaitCard label="家长答题状态" answered={answeredRoles.includes('parent')} />
+                    <AnswerWaitCard label="孩子答题状态" answered={answeredRoles.includes('child')} />
+                  </div>
+
+                  {roundResult && (
+                    <div className="mt-6 rounded border border-teal-300/40 bg-teal-300/15 p-4">
+                      <p className="text-lg font-bold text-teal-100">{roundResult.message}</p>
+                      <p className="mt-2 text-sm text-slate-200">2 秒后自动进入下一题。</p>
+                    </div>
                   )}
-                </div>
-              </div>
-
-              <div className="mt-6 grid gap-4 md:grid-cols-2">
-                <AnswerWaitCard label="家长答题状态" answered={false} />
-                <AnswerWaitCard label="孩子答题状态" answered={false} />
-              </div>
+                </>
+              )}
             </div>
           </section>
         )}
@@ -450,6 +500,31 @@ function TextInput({
   )
 }
 
+function QrPanel({ activeCode, joinUrl }: { activeCode: string; joinUrl: string }) {
+  return (
+    <aside className="rounded border border-white/10 bg-white/10 p-5 shadow-2xl shadow-black/20 backdrop-blur">
+      <p className="text-sm font-semibold text-teal-200">微信扫码加入</p>
+      {activeCode ? (
+        <>
+          {isLocalHost() && (
+            <div className="mt-4 rounded border border-amber-300/70 bg-amber-300/15 p-3 text-sm leading-6 text-amber-100">
+              当前是 localhost，手机微信扫码可能无法打开。请用电脑局域网 IP 访问本页面后再扫码。
+            </div>
+          )}
+          <div className="mt-4 flex justify-center rounded bg-white p-4">
+            <QRCodeSVG value={joinUrl} size={240} />
+          </div>
+          <p className="mt-3 break-all rounded border border-white/10 bg-slate-950/35 p-3 font-mono text-xs leading-5 text-slate-300">
+            {joinUrl}
+          </p>
+        </>
+      ) : (
+        <p className="mt-4 text-sm leading-6 text-slate-300">创建房间后会显示二维码。</p>
+      )}
+    </aside>
+  )
+}
+
 function PlayerCard({ title, player }: { title: string; player?: Player }) {
   return (
     <div className="rounded border border-white/10 bg-slate-950/30 p-4">
@@ -471,6 +546,56 @@ function AnswerWaitCard({ label, answered }: { label: string; answered: boolean 
       <p className={answered ? 'mt-2 font-semibold text-teal-200' : 'mt-2 font-semibold text-amber-100'}>
         {answered ? '已答题' : '等待答题'}
       </p>
+    </div>
+  )
+}
+
+function ScoreBar({ scores }: { scores?: Partial<Scores> }) {
+  const ropePosition = Math.max(-100, Math.min(100, scores?.ropePosition ?? 0))
+  return (
+    <div className="mt-6 rounded border border-white/10 bg-slate-950/30 p-4">
+      <div className="relative h-3 rounded-full bg-slate-700">
+        <div className="absolute left-1/2 top-[-6px] h-6 w-px bg-white/50" />
+        <div
+          className="absolute top-1/2 h-6 w-6 -translate-y-1/2 rounded-full bg-teal-300 shadow-lg shadow-teal-950/50 transition-all duration-700"
+          style={{ left: `calc(50% + ${ropePosition / 2}%)` }}
+        />
+      </div>
+      <div className="mt-4 grid gap-2 text-sm text-slate-300 sm:grid-cols-4">
+        <span>默契 {scores?.tacitScore ?? 0}</span>
+        <span>共情 {scores?.empathyScore ?? 0}</span>
+        <span>压力 {scores?.pressureScore ?? 0}</span>
+        <span>共识 {scores?.consensusScore ?? 0}</span>
+      </div>
+    </div>
+  )
+}
+
+function FinishedView({ room }: { room: Room }) {
+  const game = room.game
+  return (
+    <div>
+      <p className="text-sm font-semibold text-teal-200">游戏结束</p>
+      <h2 className="mt-2 text-3xl font-bold">已完成 10 题，进入报告阶段</h2>
+      <ScoreBar scores={game} />
+      <div className="mt-6 grid gap-4 md:grid-cols-2">
+        <div className="rounded border border-white/10 bg-slate-950/30 p-4">
+          <p className="font-semibold text-slate-100">发现的差异</p>
+          <ul className="mt-3 space-y-2 text-sm text-slate-300">
+            {(game?.differences.length ? game.differences : ['本局暂未记录明显认知差异。']).map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </div>
+        <div className="rounded border border-white/10 bg-slate-950/30 p-4">
+          <p className="font-semibold text-slate-100">情绪提醒</p>
+          <ul className="mt-3 space-y-2 text-sm text-slate-300">
+            {(game?.emotionWarnings.length ? game.emotionWarnings : ['本局暂未触发高压力提醒。']).map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
     </div>
   )
 }
