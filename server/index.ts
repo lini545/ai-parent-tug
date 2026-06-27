@@ -2,8 +2,9 @@ import express from 'express'
 import http from 'node:http'
 import os from 'node:os'
 import { Server } from 'socket.io'
-import { generateQuestions } from './src/aiService.ts'
+import { generateFamilyReport, generateQuestions } from './src/aiService.ts'
 import type { Question } from './src/mockQuestions.ts'
+import type { Report, ReportGameState } from './src/reportGenerator.ts'
 
 type PlayerRole = 'parent' | 'child'
 
@@ -11,11 +12,6 @@ type Player = {
   id: string
   nickname: string
   connected: boolean
-}
-
-type Answer = {
-  role: PlayerRole
-  answerId: string
 }
 
 type RoundResult = {
@@ -43,6 +39,7 @@ type GameState = {
   emotionWarnings: string[]
   questions: Question[]
   lastRoundResult?: RoundResult
+  report?: Report
 }
 
 type Room = {
@@ -74,26 +71,20 @@ const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 
 const getLanIp = () => {
   const interfaces = os.networkInterfaces()
-
   for (const addresses of Object.values(interfaces)) {
     for (const address of addresses ?? []) {
-      if (address.family === 'IPv4' && !address.internal) {
-        return address.address
-      }
+      if (address.family === 'IPv4' && !address.internal) return address.address
     }
   }
-
   return '127.0.0.1'
 }
 
 const makeRoomCode = () => {
   let code = ''
-
   do {
     code = Array.from({ length: 6 }, () => alphabet[Math.floor(Math.random() * alphabet.length)])
       .join('')
   } while (rooms.has(code))
-
   return code
 }
 
@@ -133,9 +124,7 @@ const emitRoomUpdated = (room: Room) => {
 const emitCurrentQuestion = (room: Room) => {
   const game = room.game
   const question = currentQuestion(room)
-  if (!game || !question) {
-    return
-  }
+  if (!game || !question) return
 
   const answers = game.answers[question.id] ?? {}
   io.to(room.code).emit('question_updated', {
@@ -154,26 +143,14 @@ const emitCurrentQuestion = (room: Room) => {
 }
 
 const getRoleForSocket = (room: Room, socketId: string): PlayerRole | null => {
-  if (room.parent?.id === socketId) {
-    return 'parent'
-  }
-
-  if (room.child?.id === socketId) {
-    return 'child'
-  }
-
+  if (room.parent?.id === socketId) return 'parent'
+  if (room.child?.id === socketId) return 'child'
   return null
 }
 
 const moveRopeTowardCenter = (position: number) => {
-  if (position > 0) {
-    return Math.max(0, position - 15)
-  }
-
-  if (position < 0) {
-    return Math.min(0, position + 15)
-  }
-
+  if (position > 0) return Math.max(0, position - 15)
+  if (position < 0) return Math.min(0, position + 15)
   return 0
 }
 
@@ -182,9 +159,7 @@ const findOption = (question: Question, answerId: string) =>
 
 const settleRound = (room: Room, question: Question, answers: Record<PlayerRole, string>) => {
   const game = room.game
-  if (!game) {
-    return
-  }
+  if (!game) return
 
   const isMatch = answers.parent === answers.child
   let message = ''
@@ -247,17 +222,44 @@ const settleRound = (room: Room, question: Question, answers: Record<PlayerRole,
   }
 }
 
+const makeReportState = (room: Room): ReportGameState => {
+  const game = room.game
+  if (!game) throw new Error('Missing game state')
+
+  return {
+    parentNickname: room.parent?.nickname ?? '家长',
+    childNickname: room.child?.nickname ?? '孩子',
+    tacitScore: game.tacitScore,
+    empathyScore: game.empathyScore,
+    pressureScore: game.pressureScore,
+    consensusScore: game.consensusScore,
+    ropePosition: game.ropePosition,
+    differences: game.differences,
+    emotionWarnings: game.emotionWarnings,
+    questions: game.questions,
+    answers: game.answers,
+  }
+}
+
+const finishGame = async (room: Room) => {
+  if (!room.game) return
+
+  room.status = 'finished'
+  emitRoomUpdated(room)
+  const report = await generateFamilyReport(makeReportState(room))
+  room.game.report = report
+  emitRoomUpdated(room)
+  io.to(room.code).emit('report_ready', toClientRoom(room))
+  io.to(room.code).emit('game_finished', toClientRoom(room))
+}
+
 const advanceAfterRound = (room: Room) => {
   setTimeout(() => {
     const game = room.game
-    if (!game) {
-      return
-    }
+    if (!game) return
 
     if (game.currentQuestionIndex >= game.questions.length - 1) {
-      room.status = 'finished'
-      emitRoomUpdated(room)
-      io.to(room.code).emit('game_finished', toClientRoom(room))
+      void finishGame(room)
       return
     }
 
@@ -288,7 +290,6 @@ io.on('connection', (socket) => {
     rooms.set(code, room)
     socketRooms.set(socket.id, code)
     socket.join(code)
-
     socket.emit('room_created', toClientRoom(room))
     emitRoomUpdated(room)
   })
@@ -390,10 +391,9 @@ io.on('connection', (socket) => {
       questionAnswers[actualRole] = payload.answerId
       room.game.answers[question.id] = questionAnswers
 
-      const submitted: Answer = { role: actualRole, answerId: payload.answerId }
       io.to(room.code).emit('answer_submitted', {
         questionId: question.id,
-        role: submitted.role,
+        role: actualRole,
       })
       emitCurrentQuestion(room)
 
@@ -408,9 +408,7 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     const code = socketRooms.get(socket.id)
-    if (!code) {
-      return
-    }
+    if (!code) return
 
     const room = rooms.get(code)
     if (!room) {
@@ -418,13 +416,8 @@ io.on('connection', (socket) => {
       return
     }
 
-    if (room.parent?.id === socket.id) {
-      room.parent.connected = false
-    }
-
-    if (room.child?.id === socket.id) {
-      room.child.connected = false
-    }
+    if (room.parent?.id === socket.id) room.parent.connected = false
+    if (room.child?.id === socket.id) room.child.connected = false
 
     socketRooms.delete(socket.id)
     emitRoomUpdated(room)

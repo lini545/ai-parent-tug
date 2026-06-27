@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
+import {
+  PolarAngleAxis,
+  PolarGrid,
+  PolarRadiusAxis,
+  Radar,
+  RadarChart,
+  ResponsiveContainer,
+} from 'recharts'
 import { socket } from './lib/socket'
 
 type PlayerRole = 'parent' | 'child'
@@ -56,6 +64,23 @@ type GameState = Scores & {
   emotionWarnings: string[]
   questions: Question[]
   lastRoundResult?: RoundResult
+  report?: Report
+}
+
+type Report = {
+  summary: string
+  endingType: '高共鸣结局' | '需要更多倾听' | '认知差异明显'
+  radarScores: { name: string; value: number }[]
+  differenceAnalysis: {
+    question: string
+    parentAnswer: string
+    childAnswer: string
+    analysis: string
+  }[]
+  emotionAnalysis: string
+  suggestions: string[]
+  familyChallenge: string
+  source: 'ai' | 'rule'
 }
 
 type Room = {
@@ -76,13 +101,14 @@ type QuestionState = {
   scores: Scores
 }
 
-type Page = 'home' | 'create' | 'join' | 'room' | 'game'
+type Page = 'home' | 'create' | 'join' | 'room' | 'game' | 'report'
 
 const getInitialPage = (): Page => {
   if (window.location.pathname.startsWith('/create')) return 'create'
   if (window.location.pathname.startsWith('/join')) return 'join'
   if (window.location.pathname.startsWith('/room')) return 'room'
   if (window.location.pathname.startsWith('/game')) return 'game'
+  if (window.location.pathname.startsWith('/report')) return 'report'
   return 'home'
 }
 
@@ -92,7 +118,13 @@ const getCodeFromUrl = () => {
 
   const roomMatch = window.location.pathname.match(/^\/room\/([A-Z0-9]{6})/i)
   const gameMatch = window.location.pathname.match(/^\/game\/([A-Z0-9]{6})/i)
-  return roomMatch?.[1]?.toUpperCase() ?? gameMatch?.[1]?.toUpperCase() ?? ''
+  const reportMatch = window.location.pathname.match(/^\/report\/([A-Z0-9]{6})/i)
+  return (
+    roomMatch?.[1]?.toUpperCase() ??
+    gameMatch?.[1]?.toUpperCase() ??
+    reportMatch?.[1]?.toUpperCase() ??
+    ''
+  )
 }
 
 const navigate = (path: string) => window.history.pushState(null, '', path)
@@ -153,7 +185,14 @@ function App() {
     const onRoundResult = (result: RoundResult) => setRoundResult(result)
     const onGameFinished = (nextRoom: Room) => {
       setRoom(nextRoom)
-      setPage('game')
+      setPage('report')
+      navigate(`/report/${nextRoom.code}`)
+    }
+    const onReportReady = (nextRoom: Room) => {
+      setRoom(nextRoom)
+      setRoomCode(nextRoom.code)
+      setPage('report')
+      navigate(`/report/${nextRoom.code}`)
     }
     const onErrorMessage = (message: string) => setError(message)
 
@@ -166,6 +205,7 @@ function App() {
     socket.on('game_started', onGameStarted)
     socket.on('question_updated', onQuestionUpdated)
     socket.on('round_result', onRoundResult)
+    socket.on('report_ready', onReportReady)
     socket.on('game_finished', onGameFinished)
     socket.on('error_message', onErrorMessage)
     socket.connect()
@@ -180,6 +220,7 @@ function App() {
       socket.off('game_started', onGameStarted)
       socket.off('question_updated', onQuestionUpdated)
       socket.off('round_result', onRoundResult)
+      socket.off('report_ready', onReportReady)
       socket.off('game_finished', onGameFinished)
       socket.off('error_message', onErrorMessage)
     }
@@ -442,6 +483,8 @@ function App() {
           </section>
         )}
 
+        {page === 'report' && <ReportView room={room} onRestart={() => goTo('home', '/')} />}
+
         {error && (
           <div className="fixed bottom-4 left-1/2 w-[calc(100%-2rem)] max-w-md -translate-x-1/2 rounded border border-rose-300/40 bg-rose-950/90 px-4 py-3 text-sm text-rose-100 shadow-xl">
             {error}
@@ -596,6 +639,118 @@ function FinishedView({ room }: { room: Room }) {
           </ul>
         </div>
       </div>
+    </div>
+  )
+}
+
+function ReportView({ room, onRestart }: { room: Room | null; onRestart: () => void }) {
+  const game = room?.game
+  const report = game?.report
+
+  if (!report || !game) {
+    return (
+      <section className="flex flex-1 items-center py-8">
+        <div className="w-full rounded border border-white/10 bg-white/10 p-5 shadow-2xl shadow-black/20 backdrop-blur">
+          <p className="text-sm font-semibold text-teal-200">报告生成中</p>
+          <h2 className="mt-2 text-3xl font-bold">正在整理本局亲子默契报告……</h2>
+          <p className="mt-3 text-slate-300">如果 AI 不可用，系统会自动生成规则报告，不会让页面空白。</p>
+        </div>
+      </section>
+    )
+  }
+
+  return (
+    <section className="flex flex-1 items-center py-8">
+      <div className="w-full space-y-5">
+        <div className="rounded border border-white/10 bg-white/10 p-5 shadow-2xl shadow-black/20 backdrop-blur">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-sm font-semibold text-teal-200">
+                {report.source === 'ai' ? 'AI 亲子默契报告' : '规则兜底报告'}
+              </p>
+              <h2 className="mt-2 text-3xl font-bold">{report.endingType}</h2>
+            </div>
+            <button
+              type="button"
+              onClick={onRestart}
+              className="h-11 rounded bg-teal-400 px-5 font-semibold text-slate-950"
+            >
+              重新开始
+            </button>
+          </div>
+          <p className="mt-4 leading-7 text-slate-200">{report.summary}</p>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-4">
+          <MetricCard label="默契值" value={game.tacitScore} />
+          <MetricCard label="共情值" value={game.empathyScore} />
+          <MetricCard label="压力值" value={game.pressureScore} />
+          <MetricCard label="沟通共识度" value={game.consensusScore} />
+        </div>
+
+        <div className="grid gap-5 lg:grid-cols-[360px_1fr]">
+          <div className="h-[340px] rounded border border-white/10 bg-white/10 p-4 backdrop-blur">
+            <ResponsiveContainer width="100%" height="100%">
+              <RadarChart data={report.radarScores}>
+                <PolarGrid />
+                <PolarAngleAxis dataKey="name" tick={{ fill: '#cbd5e1', fontSize: 12 }} />
+                <PolarRadiusAxis domain={[0, 100]} tick={false} axisLine={false} />
+                <Radar dataKey="value" stroke="#2dd4bf" fill="#2dd4bf" fillOpacity={0.32} />
+              </RadarChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="space-y-4">
+            <ReportBlock title="认知差异分析">
+              <div className="space-y-3">
+                {report.differenceAnalysis.map((item) => (
+                  <div key={`${item.question}-${item.parentAnswer}`} className="rounded bg-slate-950/30 p-3">
+                    <p className="font-semibold text-slate-100">{item.question}</p>
+                    <p className="mt-2 text-sm text-slate-300">家长：{item.parentAnswer}</p>
+                    <p className="text-sm text-slate-300">孩子：{item.childAnswer}</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-200">{item.analysis}</p>
+                  </div>
+                ))}
+              </div>
+            </ReportBlock>
+
+            <ReportBlock title="情绪沟通分析">
+              <p className="leading-7 text-slate-200">{report.emotionAnalysis}</p>
+            </ReportBlock>
+          </div>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <ReportBlock title="改进建议">
+            <ul className="space-y-2 text-slate-200">
+              {report.suggestions.map((suggestion) => (
+                <li key={suggestion}>{suggestion}</li>
+              ))}
+            </ul>
+          </ReportBlock>
+          <ReportBlock title="下一次家庭挑战">
+            <p className="text-lg font-semibold leading-8 text-teal-100">{report.familyChallenge}</p>
+          </ReportBlock>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function MetricCard({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded border border-white/10 bg-white/10 p-4 backdrop-blur">
+      <p className="text-sm text-slate-400">{label}</p>
+      <p className="mt-2 text-3xl font-bold text-teal-200">{value}</p>
+    </div>
+  )
+}
+
+function ReportBlock({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="rounded border border-white/10 bg-white/10 p-4 backdrop-blur">
+      <h3 className="font-semibold text-teal-200">{title}</h3>
+      <div className="mt-3">{children}</div>
     </div>
   )
 }

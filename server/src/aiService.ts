@@ -2,6 +2,11 @@ import dotenv from 'dotenv'
 import OpenAI from 'openai'
 import { z } from 'zod'
 import { mockQuestions, type Question } from './mockQuestions.ts'
+import {
+  generateRuleBasedReport,
+  type Report,
+  type ReportGameState,
+} from './reportGenerator.ts'
 
 dotenv.config({ path: '.env.local' })
 
@@ -66,24 +71,51 @@ const questionsSchema = z
     }
   })
 
+const reportSchema = z.object({
+  summary: z.string().min(20),
+  endingType: z.enum(['高共鸣结局', '需要更多倾听', '认知差异明显']),
+  radarScores: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        value: z.number().min(0).max(100),
+      }),
+    )
+    .length(6),
+  differenceAnalysis: z.array(
+    z.object({
+      question: z.string().min(1),
+      parentAnswer: z.string().min(1),
+      childAnswer: z.string().min(1),
+      analysis: z.string().min(1),
+    }),
+  ),
+  emotionAnalysis: z.string().min(10),
+  suggestions: z.array(z.string().min(5)).min(3),
+  familyChallenge: z.string().min(8),
+})
+
+const shouldUseAi = () => process.env.USE_AI !== 'false' && Boolean(process.env.OPENAI_API_KEY)
+
+const client = () =>
+  new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+    timeout: Number(process.env.AI_TIMEOUT_MS ?? 15000),
+  })
+
 const parseJson = (content: string) => {
   const normalized = content.trim().replace(/^```json\s*/i, '').replace(/```$/i, '')
   return JSON.parse(normalized)
 }
 
 export async function generateQuestions(settings: QuestionSettings): Promise<Question[]> {
-  if (process.env.USE_AI === 'false' || !process.env.OPENAI_API_KEY) {
+  if (!shouldUseAi()) {
     console.log('Question source: mock')
     return mockQuestions
   }
 
   try {
-    const client = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
-      timeout: Number(process.env.AI_TIMEOUT_MS ?? 15000),
-    })
-
-    const completion = await client.chat.completions.create({
+    const completion = await client().chat.completions.create({
       model: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
       response_format: { type: 'json_object' },
       messages: [
@@ -116,16 +148,64 @@ export async function generateQuestions(settings: QuestionSettings): Promise<Que
     })
 
     const content = completion.choices[0]?.message?.content
-    if (!content) {
-      throw new Error('AI 返回内容为空')
-    }
+    if (!content) throw new Error('AI 返回内容为空')
 
     const data = parseJson(content)
     const questions = questionsSchema.parse(data.questions)
     console.log('Question source: ai')
     return questions
-  } catch (error) {
+  } catch {
     console.warn('Question source: mock. AI question generation failed.')
     return mockQuestions
+  }
+}
+
+export async function generateFamilyReport(gameState: ReportGameState): Promise<Report> {
+  const fallback = () => generateRuleBasedReport(gameState)
+
+  if (!shouldUseAi()) {
+    console.log('Report source: rule')
+    return fallback()
+  }
+
+  try {
+    const completion = await client().chat.completions.create({
+      model: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
+      response_format: { type: 'json_object' },
+      messages: [
+        {
+          role: 'system',
+          content: [
+            '你是亲子活动后的家庭沟通报告助手。',
+            '只输出 JSON，不输出 Markdown。',
+            '不做心理诊断，不使用恐吓式语言，不批判家长或孩子。',
+            '语气必须温和、具体、可执行，必须结合本局真实答题数据。',
+          ].join('\n'),
+        },
+        {
+          role: 'user',
+          content: [
+            '请生成 Report JSON。',
+            'Report 字段：summary, endingType, radarScores, differenceAnalysis, emotionAnalysis, suggestions, familyChallenge。',
+            'endingType 只能是：高共鸣结局、需要更多倾听、认知差异明显。',
+            'radarScores 必须正好 6 项：默契理解、情绪共情、表达安全感、规则共识、压力控制、共同解决，value 0-100。',
+            'suggestions 至少 3 条。',
+            'familyChallenge 必须是一条今晚就能执行的亲子小任务。',
+            `本局数据：${JSON.stringify(gameState)}`,
+          ].join('\n'),
+        },
+      ],
+    })
+
+    const content = completion.choices[0]?.message?.content
+    if (!content) throw new Error('AI 返回内容为空')
+
+    const data = parseJson(content)
+    const report = reportSchema.parse(data)
+    console.log('Report source: ai')
+    return { ...report, source: 'ai' }
+  } catch {
+    console.warn('Report source: rule. AI report generation failed.')
+    return fallback()
   }
 }
