@@ -9,7 +9,7 @@ import {
   RadarChart,
   ResponsiveContainer,
 } from 'recharts'
-import { socket } from './lib/socket'
+import { getServerOrigin, socket } from './lib/socket'
 
 type PlayerRole = 'parent' | 'child'
 
@@ -129,11 +129,23 @@ const getCodeFromUrl = () => {
 
 const navigate = (path: string) => window.history.pushState(null, '', path)
 
-const makeJoinUrl = (code: string) =>
-  `${window.location.protocol}//${window.location.hostname}:5173/join?code=${code}`
+const makeJoinUrl = (code: string, origin = window.location.origin) =>
+  `${origin}/join?code=${encodeURIComponent(code)}`
 
 const isLocalHost = () =>
   window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+
+const getClientOriginFromServerOrigin = (serverOrigin?: string) => {
+  if (!serverOrigin) return ''
+
+  try {
+    const url = new URL(serverOrigin)
+    url.port = window.location.port || '5173'
+    return url.origin
+  } catch {
+    return ''
+  }
+}
 
 const resultCopy = (result: RoundResult | null) => {
   if (!result) return ''
@@ -160,6 +172,7 @@ function App() {
   const [selectedAnswerId, setSelectedAnswerId] = useState('')
   const [roundResult, setRoundResult] = useState<RoundResult | null>(null)
   const [error, setError] = useState('')
+  const [lanClientOrigin, setLanClientOrigin] = useState('')
 
   useEffect(() => {
     const syncRoute = () => {
@@ -243,6 +256,18 @@ function App() {
     socket.on('game_finished', onGameFinished)
     socket.on('error_message', onErrorMessage)
     socket.connect()
+
+    fetch(`${getServerOrigin()}/api/health`)
+      .then((response) => response.json())
+      .then((payload: { serverOrigin?: string }) => {
+        const nextOrigin = getClientOriginFromServerOrigin(payload.serverOrigin)
+        if (nextOrigin && !nextOrigin.includes('localhost') && !nextOrigin.includes('127.0.0.1')) {
+          setLanClientOrigin(nextOrigin)
+        }
+      })
+      .catch(() => {
+        setLanClientOrigin('')
+      })
 
     return () => {
       window.removeEventListener('popstate', syncRoute)
@@ -365,6 +390,7 @@ function App() {
             role={role}
             canStart={canStart}
             joinUrl={joinUrl}
+            lanClientOrigin={lanClientOrigin}
             startGame={startGame}
           />
         )}
@@ -515,6 +541,7 @@ function RoomPage({
   role,
   canStart,
   joinUrl,
+  lanClientOrigin,
   startGame,
 }: {
   activeCode: string
@@ -523,6 +550,7 @@ function RoomPage({
   role: PlayerRole | null
   canStart: boolean
   joinUrl: string
+  lanClientOrigin: string
   startGame: () => void
 }) {
   const childReady = Boolean(room?.child?.connected)
@@ -571,7 +599,7 @@ function RoomPage({
         </p>
       </div>
 
-      <RoomQRCode activeCode={activeCode} joinUrl={joinUrl} />
+      <RoomQRCode activeCode={activeCode} joinUrl={joinUrl} lanClientOrigin={lanClientOrigin} />
     </section>
   )
 }
@@ -802,24 +830,51 @@ function RoomStatus({
   )
 }
 
-function RoomQRCode({ activeCode, joinUrl }: { activeCode: string; joinUrl: string }) {
+function RoomQRCode({
+  activeCode,
+  joinUrl,
+  lanClientOrigin,
+}: {
+  activeCode: string
+  joinUrl: string
+  lanClientOrigin: string
+}) {
+  const openedFromLocalhost = isLocalHost()
+  const lanJoinUrl = activeCode && lanClientOrigin ? makeJoinUrl(activeCode, lanClientOrigin) : ''
+  const qrJoinUrl = openedFromLocalhost ? lanJoinUrl : joinUrl
+
   return (
     <aside className="warm-card p-5">
       <p className="show-badge w-fit bg-sky-100 text-sky-700">扫码入场牌</p>
       <h2 className="mt-4 text-2xl font-black text-orange-600">孩子用微信扫一扫加入</h2>
       {activeCode ? (
         <>
-          {isLocalHost() && (
+          {openedFromLocalhost && (
             <div className="mt-4 rounded-[24px] border-2 border-amber-300 bg-amber-50 p-4 text-sm font-bold leading-6 text-amber-800">
-              当前是 localhost，手机微信扫码可能无法打开。请用电脑局域网 IP 访问本页面后再扫码。
+              当前家长端是 localhost，手机微信不能打开 localhost 二维码。请用{' '}
+              <span className="font-mono">{lanClientOrigin || '电脑局域网 IP 地址'}/</span>{' '}
+              打开家长端后重新创建房间。
             </div>
           )}
-          <div className="mt-5 flex justify-center rounded-[28px] bg-white p-4 shadow-inner">
-            <QRCodeSVG value={joinUrl} size={236} />
-          </div>
-          <p className="mt-3 break-all rounded-2xl bg-stone-50 p-3 font-mono text-xs leading-5 text-stone-500">
-            {joinUrl}
-          </p>
+          {qrJoinUrl ? (
+            <>
+              <div className="mt-5 flex justify-center rounded-[28px] bg-white p-4 shadow-inner">
+                <QRCodeSVG value={qrJoinUrl} size={236} />
+              </div>
+              <p className="mt-3 break-all rounded-2xl bg-stone-50 p-3 font-mono text-xs leading-5 text-stone-500">
+                {qrJoinUrl}
+              </p>
+              {openedFromLocalhost && (
+                <p className="mt-2 rounded-2xl bg-amber-100 px-3 py-2 text-xs font-bold leading-5 text-amber-800">
+                  当前二维码已改用局域网链接；现场演示仍建议从局域网地址打开家长端，避免微信访问空白。
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="mt-5 rounded-[24px] border border-amber-200 bg-amber-50 p-4 text-sm font-bold leading-6 text-amber-800">
+              正在获取局域网地址，暂不生成 localhost 二维码。请用电脑终端显示的 Network 地址打开家长端。
+            </p>
+          )}
         </>
       ) : (
         <p className="mt-4 font-semibold text-stone-500">创建房间后会显示二维码。</p>

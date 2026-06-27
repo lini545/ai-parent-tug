@@ -1,12 +1,12 @@
 import dotenv from 'dotenv'
 import OpenAI from 'openai'
 import { z } from 'zod'
-import { mockQuestions, type Question } from './mockQuestions.ts'
+import { mockQuestions, type Question } from './mockQuestions.js'
 import {
   generateRuleBasedReport,
   type Report,
   type ReportGameState,
-} from './reportGenerator.ts'
+} from './reportGenerator.js'
 
 dotenv.config({ path: '.env.local' })
 

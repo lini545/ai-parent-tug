@@ -1,6 +1,6 @@
 # 谁更懂谁：AI 亲子默契拔河
 
-当天可完成的亲子活动 MVP：家长在电脑端创建房间，孩子用微信扫码加入，同一局域网内通过 Socket.IO 实时联机答题，结束后生成亲子默契报告和雷达图。
+一个亲子活动场景下的双人联机 H5 MVP。家长创建房间，孩子扫码加入，双方完成默契题和情绪题，结束后生成亲子默契观察报告。
 
 ## 技术栈
 
@@ -9,9 +9,9 @@
 - qrcode.react + Recharts
 - openai + dotenv + zod
 
-## 本地配置
+## 本地开发
 
-复制 `.env.example` 为 `.env.local`，然后填写自己的 OpenAI API Key。
+复制 `.env.example` 为 `.env.local`，按需填写：
 
 ```bash
 OPENAI_API_KEY=请填写你的API_KEY
@@ -20,36 +20,98 @@ AI_TIMEOUT_MS=15000
 USE_AI=true
 ```
 
-如果当前账号不能使用默认模型，可以把 `OPENAI_MODEL` 改成账号可用模型。`.env.local` 已写入 `.gitignore`，不会提交到 Git。
-
-## 启动
+没有 `OPENAI_API_KEY` 时，系统会自动使用 mock 题库和规则报告，仍然可以完整演示。
 
 ```bash
 npm install
 npm run dev
 ```
 
-启动后终端会显示 Vite 的 `Network` 地址，例如：
-
-```text
-http://192.168.x.x:5173/
-```
-
-家长用电脑打开这个地址或 `http://localhost:5173/` 创建房间。二维码里的加入链接会使用电脑局域网 IP，不会使用 `localhost`。孩子手机需要和电脑在同一个 Wi-Fi 下，用微信扫码进入加入页。
-
-## 验收重点
-
-- 家长端创建房间后显示 6 位房间码和二维码。
-- 孩子端扫码进入 `/join/:code`，自动带入房间码，输入昵称后加入。
-- 两台设备在同一局域网下实时同步玩家、题目、答题进度和报告。
-- AI 只在后端调用，前端不会出现 API Key。
-- AI 出题和报告都要求 JSON 输出，并用 zod 校验。
-- AI 失败、超时、额度不足、没有 Key、JSON 错误或字段缺失时，自动 fallback 到 mock 题库或规则模板报告。
-
-## 检查
+局域网调试可以使用：
 
 ```bash
-npm run check
+npm run dev:host
 ```
 
-该命令会执行 TypeScript 检查和 Vite 构建。
+本地开发时，前端默认 `5173`，后端默认 `3001`。Socket.IO 会根据当前页面 hostname 连接 `http://当前hostname:3001`。
+
+## 生产模式本地测试
+
+```bash
+npm run build
+$env:NODE_ENV="production"; npm start
+```
+
+生产模式下，Express 会托管 Vite 构建出的 `dist` 静态文件，并把非 API、非 Socket.IO 路径回退到 `dist/index.html`。以下路径刷新不应 404：
+
+- `/`
+- `/create`
+- `/join`
+- `/join?code=XXXXXX`
+- `/room/:code`
+- `/game/:code`
+- `/report/:code`
+
+生产环境中，Socket.IO 使用同源连接；二维码加入链接使用 `window.location.origin + "/join?code=房间码"`。
+
+## Render 部署
+
+1. 将项目推送到 GitHub。
+2. 打开 Render。
+3. 点击 `New +`，创建 `Web Service`。
+4. 连接 GitHub 仓库。
+5. `Root Directory` 留空。
+6. `Build Command` 填：
+
+```bash
+npm run render-build
+```
+
+7. `Start Command` 填：
+
+```bash
+npm start
+```
+
+8. 在 `Environment Variables` 添加：
+
+```bash
+NODE_ENV=production
+OPENAI_API_KEY=你的API_KEY
+OPENAI_MODEL=gpt-4o-mini
+AI_TIMEOUT_MS=15000
+USE_AI=true
+```
+
+如果暂时没有 API Key，也可以不填 `OPENAI_API_KEY`，项目会自动 fallback 到 mock 题库和规则报告。
+
+9. 部署完成后，访问 Render 生成的公网 URL，例如：
+
+```text
+https://parent-child-tug.onrender.com/
+```
+
+10. 家长创建房间后，二维码会自动生成公网加入地址，例如：
+
+```text
+https://parent-child-tug.onrender.com/join?code=K7M2Q9
+```
+
+孩子用微信扫码即可加入，不需要和家长设备处于同一 Wi-Fi。
+
+## Render 免费服务提醒
+
+- Render 免费服务空闲后可能休眠。
+- 第一次打开可能需要等待几十秒。
+- 演示前请提前打开网站唤醒服务。
+- 免费服务不适合长期高并发，但适合 MVP 演示。
+
+## 常用命令
+
+```bash
+npm run dev          # 本地前后端开发
+npm run dev:host     # 本地局域网调试
+npm run check        # TypeScript 检查和构建检查
+npm run build        # 构建前端和后端
+npm start            # 启动生产服务
+```

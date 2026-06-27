@@ -1,4 +1,4 @@
-import type { Question } from './mockQuestions.ts'
+import type { Question } from './mockQuestions.js'
 
 export type PlayerRole = 'parent' | 'child'
 

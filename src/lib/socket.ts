@@ -1,6 +1,8 @@
 import { io } from 'socket.io-client'
 
 export const getServerOrigin = () => {
+  if (import.meta.env.PROD) return window.location.origin
+
   const host = window.location.hostname || '127.0.0.1'
   return `${window.location.protocol}//${host}:3001`
 }

@@ -1,10 +1,12 @@
 import express from 'express'
 import http from 'node:http'
 import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Server } from 'socket.io'
-import { generateFamilyReport, generateQuestions } from './src/aiService.ts'
-import type { Question } from './src/mockQuestions.ts'
-import type { Report, ReportGameState } from './src/reportGenerator.ts'
+import { generateFamilyReport, generateQuestions } from './src/aiService.js'
+import type { Question } from './src/mockQuestions.js'
+import type { Report, ReportGameState } from './src/reportGenerator.js'
 
 type PlayerRole = 'parent' | 'child'
 
@@ -56,6 +58,7 @@ type ClientRoom = Room & {
 }
 
 const app = express()
+app.set('trust proxy', true)
 const server = http.createServer(app)
 const io = new Server(server, {
   cors: {
@@ -65,6 +68,10 @@ const io = new Server(server, {
 })
 
 const port = Number(process.env.PORT ?? 3001)
+const isProduction = process.env.NODE_ENV === 'production'
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const clientDistPath = path.resolve(__dirname, '../../dist')
 const rooms = new Map<string, Room>()
 const socketRooms = new Map<string, string>()
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -269,14 +276,28 @@ const advanceAfterRound = (room: Room) => {
   }, 2000)
 }
 
-app.get('/api/health', (_req, res) => {
+app.get('/api/health', (req, res) => {
+  const requestOrigin = `${req.protocol}://${req.get('host')}`
+
   res.json({
     ok: true,
     service: 'ai-parent-child-tug',
     socket: 'started',
-    serverOrigin: `http://${getLanIp()}:${port}`,
+    serverOrigin: isProduction ? requestOrigin : `http://${getLanIp()}:${port}`,
   })
 })
+
+if (isProduction) {
+  app.use(express.static(clientDistPath))
+  app.use((req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) {
+      next()
+      return
+    }
+
+    res.sendFile(path.join(clientDistPath, 'index.html'))
+  })
+}
 
 io.on('connection', (socket) => {
   socket.on('create_room', (payload: { nickname?: string }) => {

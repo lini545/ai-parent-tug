@@ -8,8 +8,11 @@
     "server": "tsx watch server/index.ts",
     "dev": "concurrently \"npm:server\" \"npm:client\"",
     "dev:host": "npm run dev",
-    "check": "tsc -b && vite build",
-    "build": "tsc -b && vite build",
+    "server:build": "tsc -p server/tsconfig.json",
+    "check": "tsc -b && npm run server:build && vite build",
+    "build": "vite build && npm run server:build",
+    "start": "node server/dist/index.js",
+    "render-build": "npm install --include=dev && npm run build",
     "lint": "oxlint",
     "preview": "vite preview"
   },
