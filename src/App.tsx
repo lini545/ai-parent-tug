@@ -17,6 +17,7 @@ import type {
 } from './shared/types'
 
 type Screen = 'home' | 'join' | 'room'
+type BusyAction = 'create' | 'join' | 'start' | 'answer' | null
 
 const getJoinCodeFromPath = () => {
   const match = window.location.pathname.match(/^\/join\/(\d{6})/)
@@ -47,6 +48,7 @@ function App() {
   const [selectedOption, setSelectedOption] = useState<number | null>(null)
   const [message, setMessage] = useState('')
   const [connected, setConnected] = useState(socket.connected)
+  const [busyAction, setBusyAction] = useState<BusyAction>(null)
 
   useEffect(() => {
     const onConnect = () => setConnected(true)
@@ -55,6 +57,7 @@ function App() {
       setRoom(nextRoom)
       setScreen('room')
       setSelectedOption(null)
+      setBusyAction(null)
     }
 
     socket.on('connect', onConnect)
@@ -80,10 +83,12 @@ function App() {
 
   const createRoom = async () => {
     setMessage('')
+    setBusyAction('create')
     const response = await callSocket<PublicRoomState>('room:create', {
       nickname: nickname || '家长',
     })
 
+    setBusyAction(null)
     if (response.ok) {
       setRoom(response.data)
       setScreen('room')
@@ -95,11 +100,13 @@ function App() {
 
   const joinRoom = async () => {
     setMessage('')
+    setBusyAction('join')
     const response = await callSocket<PublicRoomState>('room:join', {
       code: joinCode,
       nickname: nickname || '孩子',
     })
 
+    setBusyAction(null)
     if (response.ok) {
       setRoom(response.data)
       setScreen('room')
@@ -115,8 +122,10 @@ function App() {
     }
 
     setMessage('')
+    setBusyAction('start')
     const response = await callSocket<PublicRoomState>('game:start', room.code)
     if (!response.ok) {
+      setBusyAction(null)
       setMessage(response.error)
     }
   }
@@ -127,6 +136,7 @@ function App() {
     }
 
     setMessage('')
+    setBusyAction('answer')
     const response = await callSocket<PublicRoomState>('answer:submit', {
       code: room.code,
       questionId: currentQuestion.id,
@@ -134,6 +144,7 @@ function App() {
     })
 
     if (!response.ok) {
+      setBusyAction(null)
       setMessage(response.error)
     }
   }
@@ -178,10 +189,10 @@ function App() {
                 <button
                   type="button"
                   onClick={createRoom}
-                  disabled={!connected}
+                  disabled={!connected || busyAction !== null}
                   className="h-12 rounded bg-teal-700 px-5 font-semibold text-white disabled:cursor-not-allowed disabled:bg-stone-400"
                 >
-                  创建房间
+                  {busyAction === 'create' ? '创建中' : '创建房间'}
                 </button>
               </div>
             </div>
@@ -191,7 +202,7 @@ function App() {
                 {getServerOrigin()}
               </p>
               <p className="mt-4 text-sm leading-6 text-stone-600">
-                手机需要和电脑在同一个局域网。不要使用 localhost 给手机访问。
+                手机需要和电脑在同一个局域网。二维码不能使用 localhost。
               </p>
             </div>
           </section>
@@ -217,10 +228,10 @@ function App() {
               <button
                 type="button"
                 onClick={joinRoom}
-                disabled={!connected || joinCode.length !== 6}
+                disabled={!connected || joinCode.length !== 6 || busyAction !== null}
                 className="h-12 rounded bg-teal-700 px-5 font-semibold text-white disabled:cursor-not-allowed disabled:bg-stone-400"
               >
-                加入房间
+                {busyAction === 'join' ? '加入中' : '加入房间'}
               </button>
             </div>
           </section>
@@ -271,10 +282,10 @@ function App() {
                     <button
                       type="button"
                       onClick={startGame}
-                      disabled={!canStart}
+                      disabled={!canStart || busyAction !== null}
                       className="mt-6 h-12 w-full max-w-xs rounded bg-teal-700 px-5 font-semibold text-white disabled:cursor-not-allowed disabled:bg-stone-400"
                     >
-                      开始游戏
+                      {busyAction === 'start' ? 'AI 出题中' : '开始游戏'}
                     </button>
                   )}
                 </div>
@@ -303,7 +314,7 @@ function App() {
                         key={option}
                         type="button"
                         onClick={() => setSelectedOption(index)}
-                        disabled={hasAnswered}
+                        disabled={hasAnswered || busyAction !== null}
                         className={`min-h-14 rounded border px-4 py-3 text-left font-medium ${
                           selectedOption === index
                             ? 'border-teal-700 bg-teal-50 text-teal-950'
@@ -319,10 +330,14 @@ function App() {
                     <button
                       type="button"
                       onClick={submitAnswer}
-                      disabled={selectedOption === null || hasAnswered}
+                      disabled={selectedOption === null || hasAnswered || busyAction !== null}
                       className="h-12 rounded bg-teal-700 px-6 font-semibold text-white disabled:cursor-not-allowed disabled:bg-stone-400"
                     >
-                      提交答案
+                      {busyAction === 'answer' && room.currentQuestionIndex === room.questions.length - 1
+                        ? '生成报告中'
+                        : busyAction === 'answer'
+                          ? '提交中'
+                          : '提交答案'}
                     </button>
                     {hasAnswered && (
                       <span className="text-sm text-stone-600">已提交，等待另一端作答。</span>
