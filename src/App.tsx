@@ -14,12 +14,40 @@ type Room = {
   parent?: Player
   child?: Player
   status: 'waiting' | 'generating_questions' | 'playing' | 'finished'
+  game?: GameState
   isParentReady: boolean
   isChildReady: boolean
 }
 
+type Question = {
+  id: string
+  type: 'tacit' | 'emotion'
+  text: string
+  options: string[]
+}
+
+type QuestionState = {
+  question: Question
+  currentQuestionIndex: number
+  totalQuestions: number
+  answers: Record<string, unknown>
+}
+
+type GameState = {
+  currentQuestionIndex: number
+  answers: Record<string, unknown>
+  ropePosition: number
+  tacitScore: number
+  empathyScore: number
+  pressureScore: number
+  consensusScore: number
+  differences: string[]
+  emotionWarnings: string[]
+  questions: Question[]
+}
+
 type Role = 'parent' | 'child' | null
-type Page = 'home' | 'create' | 'join' | 'room'
+type Page = 'home' | 'create' | 'join' | 'room' | 'game'
 
 const getInitialPage = (): Page => {
   if (window.location.pathname.startsWith('/create')) {
@@ -34,6 +62,10 @@ const getInitialPage = (): Page => {
     return 'room'
   }
 
+  if (window.location.pathname.startsWith('/game')) {
+    return 'game'
+  }
+
   return 'home'
 }
 
@@ -44,7 +76,8 @@ const getCodeFromUrl = () => {
   }
 
   const roomMatch = window.location.pathname.match(/^\/room\/([A-Z0-9]{6})/i)
-  return roomMatch?.[1]?.toUpperCase() ?? ''
+  const gameMatch = window.location.pathname.match(/^\/game\/([A-Z0-9]{6})/i)
+  return roomMatch?.[1]?.toUpperCase() ?? gameMatch?.[1]?.toUpperCase() ?? ''
 }
 
 const navigate = (path: string) => {
@@ -64,6 +97,7 @@ function App() {
   const [nickname, setNickname] = useState('')
   const [roomCode, setRoomCode] = useState(getCodeFromUrl)
   const [room, setRoom] = useState<Room | null>(null)
+  const [questionState, setQuestionState] = useState<QuestionState | null>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -84,6 +118,21 @@ function App() {
       setRoom(nextRoom)
       setRoomCode(nextRoom.code)
     }
+    const onGeneratingQuestions = (nextRoom: Room) => {
+      setRoom(nextRoom)
+      setRoomCode(nextRoom.code)
+      setPage('room')
+      navigate(`/room/${nextRoom.code}`)
+    }
+    const onGameStarted = (nextRoom: Room) => {
+      setRoom(nextRoom)
+      setRoomCode(nextRoom.code)
+      setPage('game')
+      navigate(`/game/${nextRoom.code}`)
+    }
+    const onQuestionUpdated = (nextQuestionState: QuestionState) => {
+      setQuestionState(nextQuestionState)
+    }
     const onErrorMessage = (message: string) => setError(message)
 
     window.addEventListener('popstate', syncRoute)
@@ -91,6 +140,9 @@ function App() {
     socket.on('disconnect', onDisconnect)
     socket.on('room_created', onRoomCreated)
     socket.on('room_updated', onRoomUpdated)
+    socket.on('generating_questions', onGeneratingQuestions)
+    socket.on('game_started', onGameStarted)
+    socket.on('question_updated', onQuestionUpdated)
     socket.on('error_message', onErrorMessage)
     socket.connect()
 
@@ -100,6 +152,9 @@ function App() {
       socket.off('disconnect', onDisconnect)
       socket.off('room_created', onRoomCreated)
       socket.off('room_updated', onRoomUpdated)
+      socket.off('generating_questions', onGeneratingQuestions)
+      socket.off('game_started', onGameStarted)
+      socket.off('question_updated', onQuestionUpdated)
       socket.off('error_message', onErrorMessage)
     }
   }, [])
@@ -133,6 +188,15 @@ function App() {
     socket.emit('join_room', { code: normalizedCode, nickname })
     setPage('room')
     navigate(`/room/${normalizedCode}`)
+  }
+
+  const startGame = () => {
+    if (!activeCode) {
+      return
+    }
+
+    setError('')
+    socket.emit('start_game', { code: activeCode })
   }
 
   return (
@@ -237,9 +301,16 @@ function App() {
                 房间状态：{room?.status ?? 'waiting'}
               </div>
 
+              {room?.status === 'generating_questions' && (
+                <div className="mt-4 rounded border border-teal-300/40 bg-teal-300/15 p-4 font-semibold text-teal-100">
+                  AI 正在生成本局亲子题目……
+                </div>
+              )}
+
               {role === 'parent' && (
                 <button
                   type="button"
+                  onClick={startGame}
                   disabled={!canStart}
                   className="mt-6 h-12 rounded bg-teal-400 px-6 font-semibold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-500 disabled:text-slate-300"
                 >
@@ -269,6 +340,55 @@ function App() {
                 <p className="mt-4 text-sm leading-6 text-slate-300">创建房间后会显示二维码。</p>
               )}
             </aside>
+          </section>
+        )}
+
+        {page === 'game' && (
+          <section className="flex flex-1 items-center py-8">
+            <div className="w-full rounded border border-white/10 bg-white/10 p-5 shadow-2xl shadow-black/20 backdrop-blur">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold text-teal-200">游戏进行中</p>
+                  <h2 className="mt-2 text-3xl font-bold">亲子默契题</h2>
+                </div>
+                <div className="rounded border border-white/10 bg-slate-950/35 px-4 py-3 text-sm text-slate-200">
+                  当前题号：
+                  {(questionState?.currentQuestionIndex ?? room?.game?.currentQuestionIndex ?? 0) + 1}/
+                  {questionState?.totalQuestions ?? room?.game?.questions.length ?? 1}
+                </div>
+              </div>
+
+              <div className="mt-6 grid gap-4 md:grid-cols-2">
+                <PlayerCard title="家长" player={room?.parent} />
+                <PlayerCard title="孩子" player={room?.child} />
+              </div>
+
+              <div className="mt-6 rounded border border-white/10 bg-slate-950/30 p-5">
+                <p className="text-sm font-semibold text-teal-200">
+                  {questionState?.question.type === 'emotion' ? '情绪题' : '默契题'}
+                </p>
+                <h3 className="mt-3 text-2xl font-bold leading-snug">
+                  {questionState?.question.text ?? room?.game?.questions[0]?.text ?? '正在读取题目……'}
+                </h3>
+                <div className="mt-5 grid gap-3">
+                  {(questionState?.question.options ?? room?.game?.questions[0]?.options ?? []).map(
+                    (option) => (
+                      <div
+                        key={option}
+                        className="rounded border border-white/10 bg-white/10 px-4 py-3 text-slate-100"
+                      >
+                        {option}
+                      </div>
+                    ),
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-6 grid gap-4 md:grid-cols-2">
+                <AnswerWaitCard label="家长答题状态" answered={false} />
+                <AnswerWaitCard label="孩子答题状态" answered={false} />
+              </div>
+            </div>
           </section>
         )}
 
@@ -340,6 +460,17 @@ function PlayerCard({ title, player }: { title: string; player?: Player }) {
           {player?.connected ? '已加入' : '未加入'}
         </span>
       </div>
+    </div>
+  )
+}
+
+function AnswerWaitCard({ label, answered }: { label: string; answered: boolean }) {
+  return (
+    <div className="rounded border border-white/10 bg-slate-950/30 p-4">
+      <p className="text-sm text-slate-400">{label}</p>
+      <p className={answered ? 'mt-2 font-semibold text-teal-200' : 'mt-2 font-semibold text-amber-100'}>
+        {answered ? '已答题' : '等待答题'}
+      </p>
     </div>
   )
 }

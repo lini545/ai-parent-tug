@@ -9,11 +9,32 @@ type Player = {
   connected: boolean
 }
 
+type Question = {
+  id: string
+  type: 'tacit' | 'emotion'
+  text: string
+  options: string[]
+}
+
+type GameState = {
+  currentQuestionIndex: number
+  answers: Record<string, unknown>
+  ropePosition: number
+  tacitScore: number
+  empathyScore: number
+  pressureScore: number
+  consensusScore: number
+  differences: string[]
+  emotionWarnings: string[]
+  questions: Question[]
+}
+
 type Room = {
   code: string
   parent?: Player
   child?: Player
   status: 'waiting' | 'generating_questions' | 'playing' | 'finished'
+  game?: GameState
 }
 
 type ClientRoom = Room & {
@@ -34,6 +55,21 @@ const port = Number(process.env.PORT ?? 3001)
 const rooms = new Map<string, Room>()
 const socketRooms = new Map<string, string>()
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+
+const mockQuestions: Question[] = [
+  {
+    id: 'mock-1',
+    type: 'tacit',
+    text: '孩子放学后最希望家长先做什么？',
+    options: ['问今天开心吗', '给一点安静时间', '聊作业安排', '一起吃点东西'],
+  },
+  {
+    id: 'mock-2',
+    type: 'emotion',
+    text: '发生争执时，哪句话更适合先打开沟通？',
+    options: ['你必须听我的', '我想先听听你的想法', '这有什么好说的', '你怎么又这样'],
+  },
+]
 
 const getLanIp = () => {
   const interfaces = os.networkInterfaces()
@@ -60,6 +96,27 @@ const makeRoomCode = () => {
   return code
 }
 
+const normalizeCode = (code: string) => code.trim().toUpperCase()
+
+const createPlayer = (id: string, nickname: string): Player => ({
+  id,
+  nickname: nickname.trim() || '未命名',
+  connected: true,
+})
+
+const createInitialGameState = (): GameState => ({
+  currentQuestionIndex: 0,
+  answers: {},
+  ropePosition: 0,
+  tacitScore: 0,
+  empathyScore: 0,
+  pressureScore: 0,
+  consensusScore: 0,
+  differences: [],
+  emotionWarnings: [],
+  questions: mockQuestions,
+})
+
 const toClientRoom = (room: Room): ClientRoom => ({
   ...room,
   isParentReady: Boolean(room.parent?.connected),
@@ -70,13 +127,19 @@ const emitRoomUpdated = (room: Room) => {
   io.to(room.code).emit('room_updated', toClientRoom(room))
 }
 
-const normalizeCode = (code: string) => code.trim().toUpperCase()
+const emitCurrentQuestion = (room: Room) => {
+  const game = room.game
+  if (!game) {
+    return
+  }
 
-const createPlayer = (id: string, nickname: string): Player => ({
-  id,
-  nickname: nickname.trim() || '未命名',
-  connected: true,
-})
+  io.to(room.code).emit('question_updated', {
+    question: game.questions[game.currentQuestionIndex],
+    currentQuestionIndex: game.currentQuestionIndex,
+    totalQuestions: game.questions.length,
+    answers: game.answers,
+  })
+}
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -127,6 +190,38 @@ io.on('connection', (socket) => {
     socketRooms.set(socket.id, code)
     socket.join(code)
     emitRoomUpdated(room)
+  })
+
+  socket.on('start_game', (payload: { code?: string }) => {
+    const code = normalizeCode(payload.code ?? '')
+    const room = rooms.get(code)
+
+    if (!room) {
+      socket.emit('error_message', '房间不存在，请检查房间码')
+      return
+    }
+
+    if (room.parent?.id !== socket.id) {
+      socket.emit('error_message', '只有家长可以开始游戏')
+      return
+    }
+
+    if (!room.parent || !room.child) {
+      socket.emit('error_message', '家长和孩子都加入后才能开始游戏')
+      return
+    }
+
+    room.status = 'generating_questions'
+    emitRoomUpdated(room)
+    io.to(room.code).emit('generating_questions', toClientRoom(room))
+
+    setTimeout(() => {
+      room.game = createInitialGameState()
+      room.status = 'playing'
+      emitRoomUpdated(room)
+      io.to(room.code).emit('game_started', toClientRoom(room))
+      emitCurrentQuestion(room)
+    }, 600)
   })
 
   socket.on('disconnect', () => {
