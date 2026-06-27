@@ -1,0 +1,106 @@
+import type { FamilyReport, Question } from '../src/shared/types.ts'
+
+export const fallbackQuestions: Question[] = [
+  {
+    id: 'tacit-1',
+    kind: 'tacit',
+    targetRole: 'child',
+    prompt: '孩子放学后最希望家长先做什么？',
+    options: ['先问今天开心吗', '先给一点安静时间', '先聊作业安排', '一起吃点东西'],
+    insight: '观察家长是否了解孩子放学后的恢复方式。',
+  },
+  {
+    id: 'tacit-2',
+    kind: 'tacit',
+    targetRole: 'parent',
+    prompt: '家长最近最希望孩子理解自己哪一点？',
+    options: ['工作后也会累', '提醒不是不信任', '想多一点主动沟通', '希望家里节奏更轻松'],
+    insight: '观察孩子是否看见家长的真实压力与期待。',
+  },
+  {
+    id: 'tacit-3',
+    kind: 'tacit',
+    targetRole: 'child',
+    prompt: '孩子遇到难题时更喜欢哪种帮助？',
+    options: ['直接给方法', '先听我说完', '陪我拆成小步', '让我先自己试试'],
+    insight: '识别孩子需要的是空间、陪伴还是直接指导。',
+  },
+  {
+    id: 'tacit-4',
+    kind: 'tacit',
+    targetRole: 'parent',
+    prompt: '家长觉得一次舒服的亲子时间最像什么？',
+    options: ['一起散步聊天', '一起完成小任务', '各做各的但在一起', '认真聊一件重要事'],
+    insight: '比较双方对亲子陪伴形式的理解。',
+  },
+  {
+    id: 'tacit-5',
+    kind: 'tacit',
+    targetRole: 'child',
+    prompt: '孩子被表扬时最在意哪一句？',
+    options: ['你真的很努力', '你想法很特别', '我看到你进步了', '这件事你处理得很好'],
+    insight: '帮助家长找到更贴近孩子的鼓励方式。',
+  },
+  {
+    id: 'emotion-1',
+    kind: 'emotion',
+    prompt: '孩子拖延作业时，哪种表达更适合先打开沟通？',
+    options: ['你怎么又拖到现在', '我们先看最小的一步是什么', '再不写就别玩了', '你这样让我很失望'],
+    saferOptionIndex: 1,
+    insight: '把指责换成共同拆解问题，更容易降低对抗。',
+  },
+  {
+    id: 'emotion-2',
+    kind: 'emotion',
+    prompt: '家长提醒很多次后有点着急，孩子怎样回应更合适？',
+    options: ['知道了别说了', '我听见你着急了，我先做第一步', '你总是管我', '我不想理你'],
+    saferOptionIndex: 1,
+    insight: '先确认对方情绪，再给出可执行动作。',
+  },
+  {
+    id: 'emotion-3',
+    kind: 'emotion',
+    prompt: '亲子意见不一致时，哪句话更能继续讨论？',
+    options: ['你必须听我的', '我想知道你为什么这么选', '这有什么好讨论的', '你就是不懂事'],
+    saferOptionIndex: 1,
+    insight: '好奇式提问能保护关系，也能推动问题解决。',
+  },
+  {
+    id: 'emotion-4',
+    kind: 'emotion',
+    prompt: '孩子考试没达到期待时，家长先说哪句更稳妥？',
+    options: ['你自己说怎么办', '我们先看看哪部分最可惜', '我早就提醒过你', '这成绩太让我生气了'],
+    saferOptionIndex: 1,
+    insight: '先聚焦事实和下一步，避免把成绩变成关系评价。',
+  },
+  {
+    id: 'emotion-5',
+    kind: 'emotion',
+    prompt: '发生争执后，哪种修复方式更适合家庭练习？',
+    options: ['谁错谁先道歉', '各自说一句刚才真正想表达的需要', '假装没发生', '以后都别提'],
+    saferOptionIndex: 1,
+    insight: '修复关系时，表达需要比争输赢更有帮助。',
+  },
+]
+
+export const fallbackReport: FamilyReport = {
+  title: '你们的亲子默契正在变得更清楚',
+  summary:
+    '这次游戏显示，你们已经能看见彼此的一部分习惯和期待，也有一些地方需要通过更具体的表达来校准。',
+  radar: {
+    tacitUnderstanding: 72,
+    emotionalExpression: 76,
+    listening: 70,
+    repairAbility: 68,
+    sharedRoutine: 74,
+  },
+  strengths: ['愿意一起完成题目，本身就是很好的沟通开端。', '双方都能在部分场景里选择更温和的表达。'],
+  differences: ['对“帮助”和“提醒”的感受可能不完全一样。', '遇到压力时，双方对先解决问题还是先安顿情绪的顺序可能不同。'],
+  suggestions: [
+    '每天留 5 分钟只问一件事：今天哪一刻最需要被理解？',
+    '提醒前先说明目的：我想帮你把事情变轻一点，而不是催你。',
+    '争执后用一句“我刚才真正想说的是……”做关系修复。',
+  ],
+  closing: '默契不是一次猜中，而是一次次愿意靠近。',
+  source: 'fallback',
+}
