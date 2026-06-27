@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
+import { QRCodeSVG } from 'qrcode.react'
 import { socket } from './lib/socket'
 
 type Player = {
@@ -36,21 +37,40 @@ const getInitialPage = (): Page => {
   return 'home'
 }
 
+const getCodeFromUrl = () => {
+  const searchCode = new URLSearchParams(window.location.search).get('code')
+  if (searchCode) {
+    return searchCode.trim().toUpperCase()
+  }
+
+  const roomMatch = window.location.pathname.match(/^\/room\/([A-Z0-9]{6})/i)
+  return roomMatch?.[1]?.toUpperCase() ?? ''
+}
+
 const navigate = (path: string) => {
   window.history.pushState(null, '', path)
 }
+
+const makeJoinUrl = (code: string) =>
+  `${window.location.protocol}//${window.location.hostname}:5173/join?code=${code}`
+
+const isLocalHost = () =>
+  window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
 
 function App() {
   const [page, setPage] = useState<Page>(getInitialPage)
   const [connected, setConnected] = useState(socket.connected)
   const [role, setRole] = useState<Role>(null)
   const [nickname, setNickname] = useState('')
-  const [roomCode, setRoomCode] = useState('')
+  const [roomCode, setRoomCode] = useState(getCodeFromUrl)
   const [room, setRoom] = useState<Room | null>(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    const onPopState = () => setPage(getInitialPage())
+    const syncRoute = () => {
+      setPage(getInitialPage())
+      setRoomCode(getCodeFromUrl())
+    }
     const onConnect = () => setConnected(true)
     const onDisconnect = () => setConnected(false)
     const onRoomCreated = (nextRoom: Room) => {
@@ -66,7 +86,7 @@ function App() {
     }
     const onErrorMessage = (message: string) => setError(message)
 
-    window.addEventListener('popstate', onPopState)
+    window.addEventListener('popstate', syncRoute)
     socket.on('connect', onConnect)
     socket.on('disconnect', onDisconnect)
     socket.on('room_created', onRoomCreated)
@@ -75,7 +95,7 @@ function App() {
     socket.connect()
 
     return () => {
-      window.removeEventListener('popstate', onPopState)
+      window.removeEventListener('popstate', syncRoute)
       socket.off('connect', onConnect)
       socket.off('disconnect', onDisconnect)
       socket.off('room_created', onRoomCreated)
@@ -84,6 +104,8 @@ function App() {
     }
   }, [])
 
+  const activeCode = room?.code ?? roomCode
+  const joinUrl = activeCode ? makeJoinUrl(activeCode) : ''
   const canStart = useMemo(
     () => role === 'parent' && Boolean(room?.isParentReady && room.isChildReady),
     [role, room],
@@ -93,6 +115,9 @@ function App() {
     setError('')
     setPage(nextPage)
     navigate(path)
+    if (nextPage === 'join') {
+      setRoomCode(getCodeFromUrl())
+    }
   }
 
   const createRoom = () => {
@@ -101,11 +126,13 @@ function App() {
   }
 
   const joinRoom = () => {
+    const normalizedCode = roomCode.trim().toUpperCase()
     setError('')
-    socket.emit('join_room', { code: roomCode, nickname })
+    setRoomCode(normalizedCode)
     setRole('child')
+    socket.emit('join_room', { code: normalizedCode, nickname })
     setPage('room')
-    navigate(`/room/${roomCode.trim().toUpperCase()}`)
+    navigate(`/room/${normalizedCode}`)
   }
 
   return (
@@ -172,7 +199,7 @@ function App() {
         )}
 
         {page === 'join' && (
-          <FormPanel title="孩子加入房间" description="输入昵称和家长端显示的 6 位房间码。">
+          <FormPanel title="孩子加入房间" description="输入昵称；如果扫码进入，房间码会自动填好。">
             <TextInput value={nickname} onChange={setNickname} placeholder="孩子昵称" />
             <TextInput value={roomCode} onChange={setRoomCode} placeholder="房间码" upperCase />
             <button
@@ -187,13 +214,13 @@ function App() {
         )}
 
         {page === 'room' && (
-          <section className="flex flex-1 items-center py-8">
-            <div className="w-full rounded border border-white/10 bg-white/10 p-5 shadow-2xl shadow-black/20 backdrop-blur">
+          <section className="grid flex-1 items-center gap-4 py-8 lg:grid-cols-[1fr_340px]">
+            <div className="rounded border border-white/10 bg-white/10 p-5 shadow-2xl shadow-black/20 backdrop-blur">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <p className="text-sm font-semibold text-teal-200">等待房间</p>
                   <h2 className="mt-2 font-mono text-5xl font-bold tracking-[0.18em]">
-                    {room?.code ?? (roomCode || '------')}
+                    {activeCode || '------'}
                   </h2>
                 </div>
                 <div className="rounded border border-white/10 bg-slate-950/35 px-4 py-3 text-sm text-slate-200">
@@ -220,6 +247,28 @@ function App() {
                 </button>
               )}
             </div>
+
+            <aside className="rounded border border-white/10 bg-white/10 p-5 shadow-2xl shadow-black/20 backdrop-blur">
+              <p className="text-sm font-semibold text-teal-200">微信扫码加入</p>
+              {activeCode ? (
+                <>
+                  {isLocalHost() && (
+                    <div className="mt-4 rounded border border-amber-300/70 bg-amber-300/15 p-3 text-sm leading-6 text-amber-100">
+                      当前是 localhost，手机微信扫码可能无法打开。请用电脑局域网 IP
+                      访问本页面后再扫码。
+                    </div>
+                  )}
+                  <div className="mt-4 flex justify-center rounded bg-white p-4">
+                    <QRCodeSVG value={joinUrl} size={240} />
+                  </div>
+                  <p className="mt-3 break-all rounded border border-white/10 bg-slate-950/35 p-3 font-mono text-xs leading-5 text-slate-300">
+                    {joinUrl}
+                  </p>
+                </>
+              ) : (
+                <p className="mt-4 text-sm leading-6 text-slate-300">创建房间后会显示二维码。</p>
+              )}
+            </aside>
           </section>
         )}
 
